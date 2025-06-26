@@ -104,11 +104,12 @@ pipeline {
                     withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
                         script {
                             def keyfile = KEY
+                            def bastion_ip = env.BASTION_IP
                             def mongo_ips = env.MONGO_PRIVATE_IPS.split(',')
                             def host_entries = ""
                             for (int idx = 0; idx < mongo_ips.size(); idx++) {
                                 def ip = mongo_ips[idx]
-                                host_entries += "mongo${idx+1} ansible_host=${ip} ansible_user=ubuntu ansible_ssh_private_key_file=${keyfile}\n"
+                                host_entries += """mongo${idx+1} ansible_host=${ip} ansible_user=ubuntu ansible_ssh_private_key_file=${keyfile} ansible_ssh_common_args='-o ProxyCommand="ssh -i ${keyfile} -o StrictHostKeyChecking=no -W %h:%p ubuntu@${bastion_ip}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'\n"""
                             }
                             def inventory = """
 [mongo]
@@ -130,12 +131,13 @@ ${host_entries}
                 withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
                     script {
                         def keyfile = KEY
+                        def bastion_ip = env.BASTION_IP
                         def mongo_ips = env.MONGO_PRIVATE_IPS.split(',')
                         for (int idx = 0; idx < mongo_ips.size(); idx++) {
                             def ip = mongo_ips[idx]
                             sh """
                                 echo "Testing SSH to mongo${idx+1} (${ip}) via bastion..."
-                                ssh -vvv -o StrictHostKeyChecking=no -o ProxyCommand="ssh -i ${keyfile} -o StrictHostKeyChecking=no -W %h:%p ubuntu@${env.BASTION_IP}" -i ${keyfile} ubuntu@${ip} 'echo SSH_OK'
+                                ssh -vvv -o StrictHostKeyChecking=no -o ProxyCommand="ssh -i ${keyfile} -o StrictHostKeyChecking=no -W %h:%p ubuntu@${bastion_ip}" -i ${keyfile} ubuntu@${ip} 'echo SSH_OK'
                             """
                         }
                     }
