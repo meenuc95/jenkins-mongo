@@ -80,17 +80,24 @@
     - name: Initiate replica set with all members (idempotent)
       ansible.builtin.shell: |
         mongosh --quiet --eval '
-        var status = rs.status();
-        if (status.ok !== 1 || status.members.length !== {{ replica_members | length }}) {
-          print("Initiating or reconfiguring replica set...");
+        try {
           rs.initiate({{ replica_config }});
-        } else {
-          print("Replica set already initialized with correct members.");
-        }
-        '
+        } catch (e) {
+          print("Replica already initialized or error occurred: " + e);
+        }'
       register: rs_initiate
       failed_when: false
-      changed_when: "'Initiating or reconfiguring' in rs_initiate.stdout"
+      changed_when: "'Replica already initialized' not in rs_initiate.stdout"
+
+    - name: Wait for replica set to be ready
+      ansible.builtin.wait_for:
+        port: 27017
+        delay: 5
+        timeout: 60
+
+    - name: Sleep to ensure replica propagation
+      ansible.builtin.pause:
+        seconds: 10
 
     - name: Show rs.status()
       ansible.builtin.shell: mongosh --quiet --eval "rs.status()"
