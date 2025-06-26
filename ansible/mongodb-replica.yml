@@ -34,6 +34,7 @@
         name:
           - mongodb-org
           - mongodb-org-shell
+          - mongodb-mongosh
         state: present
 
     - name: Configure mongod.conf for replica set
@@ -56,3 +57,46 @@
       ansible.builtin.service:
         name: mongod
         state: restarted
+
+- hosts: "{{ groups['mongo'][0] }}"
+  become: yes
+  tasks:
+    - name: Gather all replica member private IPs
+      ansible.builtin.set_fact:
+        replica_members: "{{ groups['mongo'] | map('extract', hostvars, ['ansible_host']) | list }}"
+
+    - name: Build replica set configuration
+      ansible.builtin.set_fact:
+        replica_config: |
+          {
+            _id: "rs0",
+            members: [
+              {% for ip in replica_members %}
+                { _id: {{ loop.index0 }}, host: "{{ ip }}:27017" }{{ "," if not loop.last else "" }}
+              {% endfor %}
+            ]
+          }
+
+    - name: Initiate replica set with all members (idempotent)
+      ansible.builtin.shell: |
+        mongosh --quiet --eval '
+        var status = rs.status();
+        if (status.ok !== 1 || status.members.length !== {{ replica_members | length }}) {
+          print("Initiating or reconfiguring replica set...");
+          rs.initiate({{ replica_config }});
+        } else {
+          print("Replica set already initialized with correct members.");
+        }
+        '
+      register: rs_initiate
+      failed_when: false
+      changed_when: "'Initiating or reconfiguring' in rs_initiate.stdout"
+
+    - name: Show rs.status()
+      ansible.builtin.shell: mongosh --quiet --eval "rs.status()"
+      register: rs_status
+      changed_when: false
+
+    - name: Print replica set status
+      ansible.builtin.debug:
+        var: rs_status.stdout
