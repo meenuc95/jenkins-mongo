@@ -8,26 +8,29 @@
         update_cache: yes
 
     - name: Add MongoDB GPG key
-      apt_key:
-        url: https://www.mongodb.org/static/pgp/server-4.4.asc
+      ansible.builtin.apt_key:
+        url: https://pgp.mongodb.com/server-7.0.asc
         state: present
 
     - name: Add MongoDB repo
-      apt_repository:
-        repo: deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/4.4 multiverse
+      ansible.builtin.apt_repository:
+        repo: deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse
         state: present
+        filename: 'mongodb-org-7.0'
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
 
     - name: Install MongoDB
-      apt:
+      ansible.builtin.apt:
         name: mongodb-org
         state: present
-        update_cache: yes
 
     - name: Install MongoDB shell client
-      apt:
+      ansible.builtin.apt:
         name: mongodb-clients
         state: present
-        update_cache: yes
 
     - name: Configure mongod.conf for replica set
       blockinfile:
