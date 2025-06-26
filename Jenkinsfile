@@ -33,7 +33,6 @@ pipeline {
                             sh 'terraform init'
                             sh 'terraform apply -auto-approve'
                         } catch (e) {
-                            // Set a flag if infra was created (terraform.tfstate exists)
                             if (fileExists('terraform.tfstate')) {
                                 currentBuild.description = "INFRA_ERROR"
                             }
@@ -52,13 +51,25 @@ pipeline {
                     script {
                         def bastion_ip = sh(script: 'terraform output -raw bastion_ip', returnStdout: true).trim()
                         def mongo_private_ips = sh(script: 'terraform output -json mongo_private_ips | jq -r .[]', returnStdout: true).trim().split('\n')
-                        // Save as environment variables for later stages
                         env.BASTION_IP = bastion_ip
                         env.MONGO_PRIVATE_IPS = mongo_private_ips.join(',')
-                        // Optionally show output
                         echo "Bastion IP: ${bastion_ip}"
                         echo "Mongo Private IPs: ${mongo_private_ips}"
                     }
+                }
+            }
+        }
+        stage('Copy SSH Key to Bastion') {
+            when {
+                expression { env.BASTION_IP }
+            }
+            steps {
+                withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
+                    sh '''
+                        echo "Copying SSH key to Bastion server..."
+                        scp -o StrictHostKeyChecking=no -i $KEY $KEY ubuntu@$BASTION_IP:~/mongo-key.pem
+                        ssh -o StrictHostKeyChecking=no -i $KEY ubuntu@$BASTION_IP "chmod 600 ~/mongo-key.pem"
+                    '''
                 }
             }
         }
@@ -69,12 +80,15 @@ pipeline {
             steps {
                 dir('ansible') {
                     script {
-                        def inventory = """
-[bastion]
-${env.BASTION_IP}
+                        def bastion = env.BASTION_IP
+                        def ssh_key = "~/mongo-key.pem"
+                        def host_entries = env.MONGO_PRIVATE_IPS.split(',').withIndex().collect { ip, idx ->
+                            "mongo${idx+1} ansible_host=${ip} ansible_user=ubuntu ansible_ssh_private_key_file=${ssh_key} ansible_ssh_common_args='-o ProxyCommand=\"ssh -i ${ssh_key} -o StrictHostKeyChecking=no -W %h:%p ubuntu@${bastion}\"'"
+                        }.join('\n')
 
+                        def inventory = """
 [mongo]
-${env.MONGO_PRIVATE_IPS.replace(',', '\n')}
+${host_entries}
 """
                         writeFile file: 'inventory.ini', text: inventory
                         echo "Generated Ansible inventory:"
@@ -95,26 +109,10 @@ ${env.MONGO_PRIVATE_IPS.replace(',', '\n')}
                 }
             }
         }
-        // ---- ADDED: Copy SSH Key to Bastion ----
-        stage('Copy SSH Key to Bastion') {
-            when {
-                expression { env.BASTION_IP }
-            }
-            steps {
-                withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
-                    sh '''
-                        echo "Copying SSH key to Bastion server..."
-                        scp -o StrictHostKeyChecking=no -i $KEY $KEY ubuntu@$BASTION_IP:~/mongo-key.pem
-                        ssh -o StrictHostKeyChecking=no -i $KEY ubuntu@$BASTION_IP "chmod 600 ~/mongo-key.pem"
-                    '''
-                }
-            }
-        }
     }
     post {
         failure {
             script {
-                // Only run destroy if infra was created or flagged as errored
                 def infraCreated = fileExists('terraform/terraform.tfstate')
                 def infraError   = currentBuild.description == "INFRA_ERROR"
                 if (infraCreated || infraError) {
@@ -137,16 +135,5 @@ ${env.MONGO_PRIVATE_IPS.replace(',', '\n')}
                 }
             }
         }
-        // Optionally, always clean up for dev/test stacks:
-        // always {
-        //     script {
-        //         if (fileExists('terraform/terraform.tfstate')) {
-        //             echo "Always: Cleaning up infrastructure..."
-        //             dir('terraform') {
-        //                 sh 'terraform destroy -auto-approve || true'
-        //             }
-        //         }
-        //     }
-        // }
     }
 }
