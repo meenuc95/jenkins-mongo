@@ -1,5 +1,8 @@
 pipeline {
     agent any
+    parameters {
+        booleanParam(name: 'DESTROY_INFRA_ONLY', defaultValue: false, description: 'Destroy infrastructure only (skip all other stages)')
+    }
     environment {
         AWS_ACCESS_KEY_ID     = credentials('AWS_ACCESS_KEY_ID')
         AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
@@ -8,7 +11,27 @@ pipeline {
         TF_VAR_ssh_key_name   = 'ubuntu-slave-jen'
     }
     stages {
+        stage('Destroy Infra') {
+            when {
+                expression { params.DESTROY_INFRA_ONLY }
+            }
+            steps {
+                script {
+                    if (fileExists('terraform/terraform.tfstate')) {
+                        echo "Destroying infrastructure as requested..."
+                        dir('terraform') {
+                            sh 'terraform destroy -auto-approve || true'
+                        }
+                    } else {
+                        echo "No terraform.tfstate found. Nothing to destroy."
+                    }
+                }
+            }
+        }
         stage('Install Dependencies') {
+            when {
+                expression { !params.DESTROY_INFRA_ONLY }
+            }
             steps {
                 sh '''
                     if ! command -v jq >/dev/null 2>&1; then
@@ -25,6 +48,9 @@ pipeline {
             }
         }
         stage('Terraform Init & Apply') {
+            when {
+                expression { !params.DESTROY_INFRA_ONLY }
+            }
             steps {
                 script {
                     dir('terraform') {
@@ -43,7 +69,7 @@ pipeline {
         }
         stage('Get Terraform Outputs') {
             when {
-                expression { fileExists('terraform/terraform.tfstate') }
+                expression { !params.DESTROY_INFRA_ONLY && fileExists('terraform/terraform.tfstate') }
             }
             steps {
                 script {
@@ -62,7 +88,7 @@ pipeline {
         }
         stage('Wait for Bastion SSH') {
             when {
-                expression { env.BASTION_IP }
+                expression { !params.DESTROY_INFRA_ONLY && env.BASTION_IP }
             }
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
@@ -97,7 +123,7 @@ pipeline {
         }
         stage('Generate Ansible Inventory') {
             when {
-                expression { env.BASTION_IP && env.MONGO_PRIVATE_IPS }
+                expression { !params.DESTROY_INFRA_ONLY && env.BASTION_IP && env.MONGO_PRIVATE_IPS }
             }
             steps {
                 dir('ansible') {
@@ -118,7 +144,7 @@ pipeline {
         }
         stage('Debug SSH through Bastion') {
             when {
-                expression { env.BASTION_IP && env.MONGO_PRIVATE_IPS }
+                expression { !params.DESTROY_INFRA_ONLY && env.BASTION_IP && env.MONGO_PRIVATE_IPS }
             }
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
@@ -138,7 +164,7 @@ pipeline {
         }
         stage('Run Ansible Playbook') {
             when {
-                expression { env.BASTION_IP && env.MONGO_PRIVATE_IPS }
+                expression { !params.DESTROY_INFRA_ONLY && env.BASTION_IP && env.MONGO_PRIVATE_IPS }
             }
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
