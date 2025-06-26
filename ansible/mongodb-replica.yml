@@ -36,7 +36,7 @@
 
     - name: Install MongoDB shell client
       ansible.builtin.apt:
-        name: mongodb-clients
+        name: mongodb-org-shell
         state: present
 
     - name: Configure mongod.conf for replica set
@@ -53,3 +53,34 @@
       ansible.builtin.service:
         name: mongod
         state: restarted
+
+- hosts: mongo[0]
+  become: yes
+  tasks:
+    - name: Initiate replica set
+      ansible.builtin.shell: |
+        mongo --eval '
+          rs.initiate({
+            _id: "rs0",
+            members: [
+              {% for host in groups["mongo"] %}
+              { _id: {{ loop.index0 }}, host: "{{ hostvars[host].ansible_host }}:27017" }{% if not loop.last %},{% endif %}
+              {% endfor %}
+            ]
+          })
+        '
+      args:
+        executable: /bin/bash
+      when: inventory_hostname == groups['mongo'][0]
+
+    - name: Check replica set status
+      ansible.builtin.shell: |
+        mongo --eval 'rs.status()'
+      args:
+        executable: /bin/bash
+      register: repl_status
+      changed_when: false
+
+    - name: Display replica set status
+      debug:
+        var: repl_status.stdout_lines
