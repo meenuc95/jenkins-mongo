@@ -11,7 +11,6 @@ pipeline {
     stages {
         stage('Install Dependencies') {
             steps {
-                // Installs jq if not already present (Debian/Ubuntu and RedHat/CentOS compatible)
                 sh '''
                     if ! command -v jq >/dev/null 2>&1; then
                         if command -v apt-get >/dev/null 2>&1; then
@@ -28,52 +27,111 @@ pipeline {
         }
         stage('Terraform Init & Apply') {
             steps {
-                dir('terraform') {
-                    sh 'terraform init'
-                    sh 'terraform apply -auto-approve'
+                script {
+                    dir('terraform') {
+                        try {
+                            sh 'terraform init'
+                            sh 'terraform apply -auto-approve'
+                        } catch (e) {
+                            // Set a flag if infra was created (terraform.tfstate exists)
+                            if (fileExists('terraform.tfstate')) {
+                                currentBuild.description = "INFRA_ERROR"
+                            }
+                            throw e
+                        }
+                    }
                 }
             }
         }
         stage('Get Terraform Outputs') {
+            when {
+                expression { fileExists('terraform/terraform.tfstate') }
+            }
             steps {
                 dir('terraform') {
                     script {
-                        // Example: get outputs and save to environment or files
                         def bastion_ip = sh(script: 'terraform output -raw bastion_ip', returnStdout: true).trim()
-                        def mongo_private_ips = sh(script: 'terraform output -json mongo_private_ips | jq -r .[]', returnStdout: true).trim()
+                        def mongo_private_ips = sh(script: 'terraform output -json mongo_private_ips | jq -r .[]', returnStdout: true).trim().split('\n')
+                        // Save as environment variables for later stages
+                        env.BASTION_IP = bastion_ip
+                        env.MONGO_PRIVATE_IPS = mongo_private_ips.join(',')
+                        // Optionally show output
                         echo "Bastion IP: ${bastion_ip}"
                         echo "Mongo Private IPs: ${mongo_private_ips}"
-                        // You can write to files or stash as needed for Ansible etc.
                     }
                 }
             }
         }
         stage('Generate Ansible Inventory') {
+            when {
+                expression { env.BASTION_IP && env.MONGO_PRIVATE_IPS }
+            }
             steps {
-                // Your Ansible inventory generation logic here
-                echo "Generating Ansible inventory..."
+                dir('ansible') {
+                    script {
+                        def inventory = """
+[bastion]
+${env.BASTION_IP}
+
+[mongodb]
+${env.MONGO_PRIVATE_IPS.replace(',', '\n')}
+"""
+                        writeFile file: 'inventory.ini', text: inventory
+                        echo "Generated Ansible inventory:"
+                        echo inventory
+                    }
+                }
             }
         }
         stage('Run Ansible Playbook') {
+            when {
+                expression { env.BASTION_IP && env.MONGO_PRIVATE_IPS }
+            }
             steps {
-                // Your Ansible playbook run logic here
-                echo "Running Ansible playbook..."
+                dir('ansible') {
+                    sh '''
+                        ansible-playbook -i inventory.ini -u ubuntu --private-key="$ANSIBLE_PRIVATE_KEY" site.yml
+                    '''
+                }
             }
         }
     }
     post {
-        always {
+        failure {
             script {
-                // Will always try to destroy infra if tfstate exists
-                if (fileExists('terraform/terraform.tfstate')) {
-                    echo "Cleaning up infrastructure: Running terraform destroy"
+                // Only run destroy if infra was created or flagged as errored
+                def infraCreated = fileExists('terraform/terraform.tfstate')
+                def infraError   = currentBuild.description == "INFRA_ERROR"
+                if (infraCreated || infraError) {
+                    echo "Pipeline failed or error during infra creation. Destroying infrastructure..."
                     dir('terraform') {
-                        sh 'terraform destroy -auto-approve'
+                        sh 'terraform destroy -auto-approve || true'
                     }
                 } else {
-                    echo "No terraform state file found. Skipping destroy."
+                    echo "No infrastructure to destroy."
                 }
             }
         }
+        aborted {
+            script {
+                if (fileExists('terraform/terraform.tfstate')) {
+                    echo "Pipeline aborted. Destroying infrastructure..."
+                    dir('terraform') {
+                        sh 'terraform destroy -auto-approve || true'
+                    }
+                }
+            }
+        }
+        // Optionally, always clean up for dev/test stacks:
+        // always {
+        //     script {
+        //         if (fileExists('terraform/terraform.tfstate')) {
+        //             echo "Always: Cleaning up infrastructure..."
+        //             dir('terraform') {
+        //                 sh 'terraform destroy -auto-approve || true'
+        //             }
+        //         }
+        //     }
+        // }
     }
 }
