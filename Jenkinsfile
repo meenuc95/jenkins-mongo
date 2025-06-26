@@ -59,6 +59,35 @@ pipeline {
                 }
             }
         }
+        stage('Wait for Bastion SSH') {
+            when {
+                expression { env.BASTION_IP }
+            }
+            steps {
+                script {
+                    def max_retries = 15
+                    def delay_sec = 10
+                    def bastion_ready = false
+                    for (int i = 0; i < max_retries; i++) {
+                        def rc = sh(
+                            script: "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i $ANSIBLE_PRIVATE_KEY ubuntu@${env.BASTION_IP} 'echo bastion_ready'",
+                            returnStatus: true
+                        )
+                        if (rc == 0) {
+                            bastion_ready = true
+                            echo "Bastion is reachable via SSH."
+                            break
+                        } else {
+                            echo "Waiting for bastion SSH... retry ${i+1}/${max_retries}"
+                            sleep delay_sec
+                        }
+                    }
+                    if (!bastion_ready) {
+                        error("Bastion not reachable via SSH after ${max_retries} attempts.")
+                    }
+                }
+            }
+        }
         stage('Copy SSH Key to Bastion') {
             when {
                 expression { env.BASTION_IP }
