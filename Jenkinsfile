@@ -11,23 +11,7 @@ pipeline {
         TF_VAR_ssh_key_name   = 'ubuntu-slave-jen'
     }
     stages {
-        stage('Destroy Infra') {
-            when {
-                expression { params.DESTROY_INFRA_ONLY }
-            }
-            steps {
-                script {
-                    if (fileExists('terraform/terraform.tfstate')) {
-                        echo "Destroying infrastructure as requested..."
-                        dir('terraform') {
-                            sh 'terraform destroy -auto-approve || true'
-                        }
-                    } else {
-                        echo "No terraform.tfstate found. Nothing to destroy."
-                    }
-                }
-            }
-        }
+        
         stage('Install Dependencies') {
             when {
                 expression { !params.DESTROY_INFRA_ONLY }
@@ -174,6 +158,23 @@ pipeline {
                             ansible all -i inventory.ini -m ping -u ubuntu --private-key="\$KEY" -vvvv
                             ansible-playbook -i inventory.ini -u ubuntu --private-key="\$KEY" -f 1 mongodb-replica.yml
                         """
+                    }
+                }
+            }
+        }
+        stage('Destroy Infra') {
+            when {
+                expression { params.DESTROY_INFRA_ONLY }
+            }
+            steps {
+                script {
+                    if (fileExists('terraform/terraform.tfstate')) {
+                        echo "Destroying infrastructure as requested..."
+                        dir('terraform') {
+                            sh 'terraform destroy -auto-approve || true'
+                        }
+                    } else {
+                        echo "No terraform.tfstate found. Nothing to destroy."
                     }
                 }
             }
