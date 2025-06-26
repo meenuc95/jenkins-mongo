@@ -58,6 +58,8 @@
         name: mongod
         state: restarted
 
+# ------------------- Initiate Replica Set on Primary Host --------------------
+
 - hosts: "{{ groups['mongo'][0] }}"
   become: yes
   tasks:
@@ -77,33 +79,45 @@
             ]
           }
 
-    - name: Initiate replica set with all members (idempotent)
+    - name: Initiate replica set with retry
       ansible.builtin.shell: |
         mongosh --quiet --eval '
         try {
-          rs.initiate({{ replica_config }});
+          if (!rs.status().ok) {
+            print("Initiating replica set...");
+            printjson(rs.initiate({{ replica_config }}));
+          } else {
+            print("Replica already initialized.");
+          }
         } catch (e) {
-          print("Replica already initialized or error occurred: " + e);
-        }'
-      register: rs_initiate
-      failed_when: false
-      changed_when: "'Replica already initialized' not in rs_initiate.stdout"
+          print("Replica initiation failed or not ready. Will retry...");
+          quit(1);
+        }
+        '
+      register: rs_init
+      retries: 5
+      delay: 5
+      until: rs_init.rc == 0
 
-    - name: Wait for replica set to be ready
-      ansible.builtin.wait_for:
-        port: 27017
-        delay: 5
-        timeout: 60
-
-    - name: Sleep to ensure replica propagation
-      ansible.builtin.pause:
-        seconds: 10
-
-    - name: Show rs.status()
-      ansible.builtin.shell: mongosh --quiet --eval "rs.status()"
+    - name: Wait for replica to be ready (retry rs.status)
+      ansible.builtin.shell: |
+        mongosh --quiet --eval '
+        try {
+          var status = rs.status();
+          if (!status.members || status.members.length < {{ replica_members | length }}) {
+            throw new Error("Replica set not fully initialized yet");
+          } else {
+            printjson(status);
+          }
+        } catch (e) {
+          quit(1);
+        }
+        '
       register: rs_status
-      changed_when: false
+      retries: 5
+      delay: 5
+      until: rs_status.rc == 0
 
-    - name: Print replica set status
+    - name: Print final replica set status
       ansible.builtin.debug:
         var: rs_status.stdout
