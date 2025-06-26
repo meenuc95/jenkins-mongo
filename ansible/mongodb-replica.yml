@@ -1,0 +1,58 @@
+- hosts: mongo
+  become: yes
+  tasks:
+    - name: Install dependencies
+      apt:
+        name: gnupg
+        state: present
+        update_cache: yes
+
+    - name: Add MongoDB GPG key
+      apt_key:
+        url: https://www.mongodb.org/static/pgp/server-4.4.asc
+        state: present
+
+    - name: Add MongoDB repo
+      apt_repository:
+        repo: deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 multiverse
+        state: present
+
+    - name: Install MongoDB
+      apt:
+        name: mongodb-org
+        state: present
+        update_cache: yes
+
+    - name: Configure mongod.conf for replica set
+      blockinfile:
+        path: /etc/mongod.conf
+        marker: "# {mark} ANSIBLE MANAGED BLOCK"
+        block: |
+          replication:
+            replSetName: "rs0"
+      notify: Restart MongoDB
+
+  handlers:
+    - name: Restart MongoDB
+      service:
+        name: mongod
+        state: restarted
+
+- hosts: mongo[0]
+  become: yes
+  tasks:
+    - name: Initiate replica set
+      shell: |
+        mongo --eval '
+          rs.initiate({
+            _id: "rs0",
+            members: [
+              {% for host in groups["mongo"] %}
+              { _id: {{ loop.index0 }}, host: "{{ hostvars[host].ansible_host }}:27017" }{% if not loop.last %},{% endif %}
+              {% endfor %}
+            ]
+          })
+        '
+      args:
+        executable: /bin/bash
+      when: inventory_hostname == groups['mongo'][0]
