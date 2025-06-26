@@ -2,19 +2,21 @@
   become: yes
   tasks:
     - name: Install dependencies
-      apt:
+      ansible.builtin.apt:
         name: gnupg
         state: present
         update_cache: yes
 
-    - name: Add MongoDB GPG key
-      ansible.builtin.apt_key:
+    - name: Download MongoDB 7.0 GPG key to /usr/share/keyrings
+      ansible.builtin.get_url:
         url: https://pgp.mongodb.com/server-7.0.asc
-        state: present
+        dest: /usr/share/keyrings/mongodb-server-7.0.gpg
+        mode: '0644'
+        force: true
 
-    - name: Add MongoDB repo
+    - name: Add MongoDB 7.0 repo for Ubuntu Jammy
       ansible.builtin.apt_repository:
-        repo: deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse
+        repo: "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse"
         state: present
         filename: 'mongodb-org-7.0'
 
@@ -33,7 +35,7 @@
         state: present
 
     - name: Configure mongod.conf for replica set
-      blockinfile:
+      ansible.builtin.blockinfile:
         path: /etc/mongod.conf
         marker: "# {mark} ANSIBLE MANAGED BLOCK"
         block: |
@@ -43,7 +45,7 @@
 
   handlers:
     - name: Restart MongoDB
-      service:
+      ansible.builtin.service:
         name: mongod
         state: restarted
 
@@ -51,7 +53,7 @@
   become: yes
   tasks:
     - name: Initiate replica set
-      shell: |
+      ansible.builtin.shell: |
         mongo --eval '
           rs.initiate({
             _id: "rs0",
