@@ -90,7 +90,7 @@ ${env.MONGO_PRIVATE_IPS.replace(',', '\n')}
             steps {
                 dir('ansible') {
                     sh '''
-                        ansible-playbook -i inventory.ini -u ubuntu --private-key="$ANSIBLE_PRIVATE_KEY" site.yml
+                        ansible-playbook -i inventory.ini -u ubuntu --private-key="$ANSIBLE_PRIVATE_KEY" ansible/mongodb-replica.yml
                     '''
                 }
             }
