@@ -73,7 +73,7 @@ pipeline {
 [bastion]
 ${env.BASTION_IP}
 
-[mongodb]
+[mongo]
 ${env.MONGO_PRIVATE_IPS.replace(',', '\n')}
 """
                         writeFile file: 'inventory.ini', text: inventory
