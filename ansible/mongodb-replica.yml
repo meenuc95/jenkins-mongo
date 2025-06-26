@@ -7,16 +7,21 @@
         state: present
         update_cache: yes
 
-    - name: Download MongoDB 7.0 GPG key to /usr/share/keyrings
+    - name: Download MongoDB GPG key
       ansible.builtin.get_url:
         url: https://pgp.mongodb.com/server-7.0.asc
-        dest: /usr/share/keyrings/mongodb-server-7.0.gpg
+        dest: /tmp/mongodb-server-7.0.asc
         mode: '0644'
-        force: true
+
+    - name: Convert GPG key to binary and move to keyrings
+      ansible.builtin.shell: |
+        gpg --dearmor < /tmp/mongodb-server-7.0.asc > /usr/share/keyrings/mongodb-server-7.0.gpg
+      args:
+        creates: /usr/share/keyrings/mongodb-server-7.0.gpg
 
     - name: Add MongoDB 7.0 repo for Ubuntu Jammy
       ansible.builtin.apt_repository:
-        repo: "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse"
+        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse"
         state: present
         filename: 'mongodb-org-7.0'
 
@@ -48,22 +53,3 @@
       ansible.builtin.service:
         name: mongod
         state: restarted
-
-- hosts: mongo[0]
-  become: yes
-  tasks:
-    - name: Initiate replica set
-      ansible.builtin.shell: |
-        mongo --eval '
-          rs.initiate({
-            _id: "rs0",
-            members: [
-              {% for host in groups["mongo"] %}
-              { _id: {{ loop.index0 }}, host: "{{ hostvars[host].ansible_host }}:27017" }{% if not loop.last %},{% endif %}
-              {% endfor %}
-            ]
-          })
-        '
-      args:
-        executable: /bin/bash
-      when: inventory_hostname == groups['mongo'][0]

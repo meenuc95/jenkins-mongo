@@ -101,24 +101,17 @@ pipeline {
             }
             steps {
                 dir('ansible') {
-                    withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
-                        script {
-                            def keyfile = KEY
-                            def bastion_ip = env.BASTION_IP
-                            def mongo_ips = env.MONGO_PRIVATE_IPS.split(',')
-                            def host_entries = ""
-                            for (int idx = 0; idx < mongo_ips.size(); idx++) {
-                                def ip = mongo_ips[idx]
-                                host_entries += """mongo${idx+1} ansible_host=${ip} ansible_user=ubuntu ansible_ssh_private_key_file=${keyfile} ansible_ssh_common_args='-o ProxyCommand="ssh -i ${keyfile} -o StrictHostKeyChecking=no -W %h:%p ubuntu@${bastion_ip}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'\n"""
-                            }
-                            def inventory = """
-[mongo]
-${host_entries}
-"""
-                            writeFile file: 'inventory.ini', text: inventory
-                            echo "Generated Ansible inventory:"
-                            echo inventory
+                    script {
+                        def mongo_ips = env.MONGO_PRIVATE_IPS.split(',')
+                        def host_entries = ""
+                        for (int idx = 0; idx < mongo_ips.size(); idx++) {
+                            def ip = mongo_ips[idx]
+                            host_entries += "mongo${idx+1} ansible_host=${ip} ansible_user=ubuntu\n"
                         }
+                        def inventory = "[mongo]\n${host_entries}"
+                        writeFile file: 'inventory.ini', text: inventory
+                        echo "Generated Ansible inventory:"
+                        echo inventory
                     }
                 }
             }
@@ -130,14 +123,13 @@ ${host_entries}
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
                     script {
-                        def keyfile = KEY
                         def bastion_ip = env.BASTION_IP
                         def mongo_ips = env.MONGO_PRIVATE_IPS.split(',')
                         for (int idx = 0; idx < mongo_ips.size(); idx++) {
                             def ip = mongo_ips[idx]
                             sh """
                                 echo "Testing SSH to mongo${idx+1} (${ip}) via bastion..."
-                                ssh -vvv -o StrictHostKeyChecking=no -o ProxyCommand="ssh -i ${keyfile} -o StrictHostKeyChecking=no -W %h:%p ubuntu@${bastion_ip}" -i ${keyfile} ubuntu@${ip} 'echo SSH_OK'
+                                ssh -vvv -o StrictHostKeyChecking=no -o ProxyCommand="ssh -i ${KEY} -o StrictHostKeyChecking=no -W %h:%p ubuntu@${bastion_ip}" -i ${KEY} ubuntu@${ip} 'echo SSH_OK'
                             """
                         }
                     }
@@ -151,14 +143,10 @@ ${host_entries}
             steps {
                 withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
                     dir('ansible') {
-                        sh "ls -l ${KEY}"
-                        sh "cat ansible.cfg || true"
-                        sh "cat inventory.ini"
                         sh """
-                            ansible all -i inventory.ini -m ping -u ubuntu --private-key="${KEY}" -vvvv
-                        """
-                        sh """
-                            ansible-playbook -i inventory.ini -u ubuntu --private-key="${KEY}" -f 1 mongodb-replica.yml
+                            export ANSIBLE_SSH_ARGS='-o ProxyCommand="ssh -i \$KEY -o StrictHostKeyChecking=no -W %h:%p ubuntu@${env.BASTION_IP}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+                            ansible all -i inventory.ini -m ping -u ubuntu --private-key="\$KEY" -vvvv
+                            ansible-playbook -i inventory.ini -u ubuntu --private-key="\$KEY" -f 1 mongodb-replica.yml
                         """
                     }
                 }
