@@ -9,3 +9,5 @@ variable "ssh_key_name"      { default = "ubuntu-slave-jen" }
 variable "bastion_ami"       { default = "ami-020cba7c55df1f615" }
 variable "mongo_ami"         { default = "ami-020cba7c55df1f615" }
 variable "mongo_count"       { default = 3 }
+variable "aws_access_key" {}
+variable "aws_secret_key" {}
