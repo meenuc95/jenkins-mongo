@@ -4,17 +4,22 @@ pipeline {
         TF_VAR_aws_access_key = credentials('AWS_ACCESS_KEY_ID')
         TF_VAR_aws_secret_key = credentials('AWS_SECRET_ACCESS_KEY')
         TF_VAR_ssh_key_name = 'ubuntu-slave-jen'
-        ANSIBLE_PRIVATE_KEY = credentials('ANSIBLE_SSH_KEY') // Jenkins secret containing the private key for ubuntu-slave-jen
+        ANSIBLE_PRIVATE_KEY = credentials('ANSIBLE_SSH_KEY')
+        INFRA_CREATED = "false"
     }
     stages {
-        stage('Checkout') {
-            steps { git url: 'https://github.com/yourorg/yourrepo.git' }
-        }
         stage('Terraform Init & Apply') {
             steps {
                 dir('terraform') {
-                    sh 'terraform init'
-                    sh 'terraform apply -auto-approve'
+                    script {
+                        try {
+                            sh 'terraform init'
+                            sh 'terraform apply -auto-approve'
+                            env.INFRA_CREATED = "true"
+                        } catch (e) {
+                            error("Terraform apply failed: ${e}")
+                        }
+                    }
                 }
             }
         }
@@ -36,6 +41,28 @@ pipeline {
                 sh '''
                 ansible-playbook -i ansible/inventory.ini ansible/mongodb-replica.yml --private-key=$ANSIBLE_PRIVATE_KEY
                 '''
+            }
+        }
+    }
+    post {
+        failure {
+            script {
+                if (env.INFRA_CREATED == "true") {
+                    echo "Pipeline failed after infrastructure creation. Destroying infrastructure..."
+                    dir('terraform') {
+                        sh 'terraform destroy -auto-approve'
+                    }
+                }
+            }
+        }
+        aborted {
+            script {
+                if (env.INFRA_CREATED == "true") {
+                    echo "Pipeline was aborted after infrastructure creation. Destroying infrastructure..."
+                    dir('terraform') {
+                        sh 'terraform destroy -auto-approve'
+                    }
+                }
             }
         }
     }
