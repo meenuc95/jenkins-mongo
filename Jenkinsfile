@@ -6,7 +6,7 @@ pipeline {
         TF_VAR_aws_access_key = credentials('AWS_ACCESS_KEY_ID')
         TF_VAR_aws_secret_key = credentials('AWS_SECRET_ACCESS_KEY')
         TF_VAR_ssh_key_name   = 'ubuntu-slave-jen'
-        ANSIBLE_PRIVATE_KEY   = credentials('ANSIBLE_SSH_KEY')
+        // Do NOT set ANSIBLE_PRIVATE_KEY here as an environment variable!
     }
     stages {
         stage('Install Dependencies') {
@@ -64,26 +64,30 @@ pipeline {
                 expression { env.BASTION_IP }
             }
             steps {
-                script {
-                    def max_retries = 15
-                    def delay_sec = 10
-                    def bastion_ready = false
-                    for (int i = 0; i < max_retries; i++) {
-                        def rc = sh(
-                            script: "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i $ANSIBLE_PRIVATE_KEY ubuntu@${env.BASTION_IP} 'echo bastion_ready'",
-                            returnStatus: true
-                        )
-                        if (rc == 0) {
-                            bastion_ready = true
-                            echo "Bastion is reachable via SSH."
-                            break
-                        } else {
-                            echo "Waiting for bastion SSH... retry ${i+1}/${max_retries}"
-                            sleep delay_sec
+                withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
+                    script {
+                        def max_retries = 15
+                        def delay_sec = 10
+                        def bastion_ready = false
+                        for (int i = 0; i < max_retries; i++) {
+                            def rc = sh(
+                                script: '''
+                                    ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i $KEY ubuntu@$BASTION_IP "echo bastion_ready"
+                                ''',
+                                returnStatus: true
+                            )
+                            if (rc == 0) {
+                                echo "Bastion is reachable via SSH."
+                                bastion_ready = true
+                                break
+                            } else {
+                                echo "Waiting for bastion SSH... retry ${i+1}/${max_retries}"
+                                sleep delay_sec
+                            }
                         }
-                    }
-                    if (!bastion_ready) {
-                        error("Bastion not reachable via SSH after ${max_retries} attempts.")
+                        if (!bastion_ready) {
+                            error("Bastion not reachable via SSH after ${max_retries} attempts.")
+                        }
                     }
                 }
             }
@@ -131,10 +135,12 @@ ${host_entries}
                 expression { env.BASTION_IP && env.MONGO_PRIVATE_IPS }
             }
             steps {
-                dir('ansible') {
-                    sh '''
-                        ansible-playbook -i inventory.ini -u ubuntu --private-key="$ANSIBLE_PRIVATE_KEY" mongodb-replica.yml
-                    '''
+                withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
+                    dir('ansible') {
+                        sh '''
+                            ansible-playbook -i inventory.ini -u ubuntu --private-key="$KEY" mongodb-replica.yml
+                        '''
+                    }
                 }
             }
         }
