@@ -6,7 +6,7 @@ pipeline {
         TF_VAR_aws_access_key = credentials('AWS_ACCESS_KEY_ID')
         TF_VAR_aws_secret_key = credentials('AWS_SECRET_ACCESS_KEY')
         TF_VAR_ssh_key_name   = 'ubuntu-slave-jen'
-        // Do NOT set ANSIBLE_PRIVATE_KEY here as an environment variable!
+        // Do NOT set ANSIBLE_PRIVATE_KEY here as a secret text!
     }
     stages {
         stage('Install Dependencies') {
@@ -113,11 +113,12 @@ pipeline {
             steps {
                 dir('ansible') {
                     script {
-                        def bastion = env.BASTION_IP
-                        def ssh_key = "~/mongo-key.pem"
-                        def host_entries = env.MONGO_PRIVATE_IPS.split(',').withIndex().collect { ip, idx ->
-                            "mongo${idx+1} ansible_host=${ip} ansible_user=ubuntu ansible_ssh_private_key_file=${ssh_key} ansible_ssh_common_args='-o ProxyCommand=\"ssh -i ${ssh_key} -o StrictHostKeyChecking=no -W %h:%p ubuntu@${bastion}\"'"
-                        }.join('\n')
+                        def mongo_ips = env.MONGO_PRIVATE_IPS.split(',')
+                        def host_entries = ""
+                        for (int idx = 0; idx < mongo_ips.size(); idx++) {
+                            def ip = mongo_ips[idx]
+                            host_entries += "mongo${idx+1} ansible_host=${ip} ansible_user=ubuntu ansible_ssh_private_key_file=~/mongo-key.pem ansible_ssh_common_args='-o ProxyCommand=\"ssh -i ~/mongo-key.pem -o StrictHostKeyChecking=no -W %h:%p ubuntu@${env.BASTION_IP}\"'\n"
+                        }
 
                         def inventory = """
 [mongo]
