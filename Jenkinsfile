@@ -95,6 +95,21 @@ ${env.MONGO_PRIVATE_IPS.replace(',', '\n')}
                 }
             }
         }
+        // ---- ADDED: Copy SSH Key to Bastion ----
+        stage('Copy SSH Key to Bastion') {
+            when {
+                expression { env.BASTION_IP }
+            }
+            steps {
+                withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
+                    sh '''
+                        echo "Copying SSH key to Bastion server..."
+                        scp -o StrictHostKeyChecking=no -i $KEY $KEY ubuntu@$BASTION_IP:~/mongo-key.pem
+                        ssh -o StrictHostKeyChecking=no -i $KEY ubuntu@$BASTION_IP "chmod 600 ~/mongo-key.pem"
+                    '''
+                }
+            }
+        }
     }
     post {
         failure {

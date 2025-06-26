@@ -14,12 +14,18 @@
 
     - name: Add MongoDB repo
       apt_repository:
-        repo: deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/4.4 multiverse
+        repo: deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/4.4 multiverse
         state: present
 
     - name: Install MongoDB
       apt:
         name: mongodb-org
+        state: present
+        update_cache: yes
+
+    - name: Install MongoDB shell client
+      apt:
+        name: mongodb-clients
         state: present
         update_cache: yes
 
