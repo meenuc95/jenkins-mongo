@@ -1,5 +1,14 @@
+# ------------------------ MONGODB INSTALL & CONFIGURE ------------------------
 - hosts: mongo
   become: yes
+  vars:
+    mongo_version: "7.0"
+    mongo_repo_key_path: "/usr/share/keyrings/mongodb-server-7.0.gpg"
+    mongo_repo_url: "https://repo.mongodb.org/apt/ubuntu"
+    mongo_repo_dist: "jammy/mongodb-org/{{ mongo_version }}"
+    mongo_port: 27017
+    replica_set_name: rs0
+
   tasks:
     - name: Install dependencies
       ansible.builtin.apt:
@@ -9,27 +18,27 @@
 
     - name: Download MongoDB GPG key
       ansible.builtin.get_url:
-        url: https://pgp.mongodb.com/server-7.0.asc
-        dest: /tmp/mongodb-server-7.0.asc
+        url: "https://pgp.mongodb.com/server-{{ mongo_version }}.asc"
+        dest: /tmp/mongodb-server.asc
         mode: '0644'
 
     - name: Convert GPG key to binary and move to keyrings
       ansible.builtin.shell: |
-        gpg --dearmor < /tmp/mongodb-server-7.0.asc > /usr/share/keyrings/mongodb-server-7.0.gpg
+        gpg --dearmor < /tmp/mongodb-server.asc > {{ mongo_repo_key_path }}
       args:
-        creates: /usr/share/keyrings/mongodb-server-7.0.gpg
+        creates: "{{ mongo_repo_key_path }}"
 
-    - name: Add MongoDB 7.0 repo for Ubuntu Jammy
+    - name: Add MongoDB apt repository
       ansible.builtin.apt_repository:
-        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse"
+        repo: "deb [ arch=amd64 signed-by={{ mongo_repo_key_path }} ] {{ mongo_repo_url }} {{ mongo_repo_dist }} multiverse"
         state: present
-        filename: 'mongodb-org-7.0'
+        filename: "mongodb-org-{{ mongo_version }}"
 
     - name: Update apt cache
       ansible.builtin.apt:
         update_cache: yes
 
-    - name: Install MongoDB packages
+    - name: Install MongoDB
       ansible.builtin.apt:
         name:
           - mongodb-org
@@ -37,13 +46,20 @@
           - mongodb-mongosh
         state: present
 
-    - name: Configure mongod.conf for replica set
+    - name: Configure mongod.conf for replication and open access
       ansible.builtin.blockinfile:
         path: /etc/mongod.conf
         marker: "# {mark} ANSIBLE MANAGED BLOCK"
         block: |
+          net:
+            bindIp: 0.0.0.0
+            port: {{ mongo_port }}
+
           replication:
-            replSetName: "rs0"
+            replSetName: "{{ replica_set_name }}"
+
+          security:
+            authorization: enabled
       notify: Restart MongoDB
 
     - name: Ensure mongod is started and enabled
@@ -57,3 +73,62 @@
       ansible.builtin.service:
         name: mongod
         state: restarted
+
+# -------------------- INITIATE REPLICA SET ON PRIMARY NODE -------------------
+- hosts: "{{ groups['mongo'][0] }}"
+  become: yes
+  tasks:
+    - name: Gather all replica member IPs
+      set_fact:
+        replica_members: "{{ groups['mongo'] | map('extract', hostvars, ['ansible_host']) | list }}"
+
+    - name: Build replica set configuration
+      set_fact:
+        replica_config: |
+          {
+            _id: "{{ replica_set_name }}",
+            members: [
+              {% for ip in replica_members %}
+                { _id: {{ loop.index0 }}, host: "{{ ip }}:{{ mongo_port }}" }{{ "," if not loop.last else "" }}
+              {% endfor %}
+            ]
+          }
+
+    - name: Initiate replica set (if not already initiated)
+      ansible.builtin.shell: |
+        mongosh --quiet --eval '
+        try {
+          rs.status();
+          print("Replica set already initialized.");
+        } catch (e) {
+          print("Initiating replica set...");
+          printjson(rs.initiate({{ replica_config }}));
+        }
+        '
+      register: rs_init
+      retries: 5
+      delay: 5
+      until: rs_init.rc == 0
+
+    - name: Wait for replica to be healthy
+      ansible.builtin.shell: |
+        mongosh --quiet --eval '
+        try {
+          var status = rs.status();
+          if (!status.members || status.members.length < {{ replica_members | length }}) {
+            throw new Error("Replica set not fully initialized yet");
+          } else {
+            printjson(status);
+          }
+        } catch (e) {
+          quit(1);
+        }
+        '
+      register: rs_status
+      retries: 5
+      delay: 5
+      until: rs_status.rc == 0
+
+    - name: Show final replica set status
+      debug:
+        var: rs_status.stdout
