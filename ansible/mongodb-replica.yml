@@ -1,108 +1,83 @@
-# -------------------- MONGODB INSTALL & CONFIGURE ON ALL NODES --------------------
-- hosts: mongo
+# ----------------- 1. INSTALL & CONFIGURE MONGODB -----------------
+- name: Install and Configure MongoDB
+  hosts: mongo
   become: yes
   vars:
-    mongo_version: "7.0"
-    mongo_repo_key_path: "/usr/share/keyrings/mongodb-server-7.0.gpg"
-    mongo_repo_url: "https://repo.mongodb.org/apt/ubuntu"
-    mongo_repo_dist: "jammy/mongodb-org/{{ mongo_version }}"
-    mongo_port: 27017
-    replica_set_name: rs0
+    mongodb_repo_key_url: "https://pgp.mongodb.com/server-7.0.asc"
+    mongodb_repo_key_path: "/usr/share/keyrings/mongodb-server-7.0.gpg"
+    replica_set_name: "rs0"
 
   tasks:
-    - name: Install dependencies
-      apt:
+    - name: Install gnupg
+      ansible.builtin.apt:
         name: gnupg
         state: present
         update_cache: yes
 
     - name: Download MongoDB GPG key
-      get_url:
-        url: "https://pgp.mongodb.com/server-{{ mongo_version }}.asc"
-        dest: /tmp/mongodb-server.asc
+      ansible.builtin.get_url:
+        url: "{{ mongodb_repo_key_url }}"
+        dest: /tmp/mongodb-server-7.0.asc
         mode: '0644'
 
     - name: Convert GPG key to binary and move to keyrings
-      shell: |
-        gpg --dearmor < /tmp/mongodb-server.asc > {{ mongo_repo_key_path }}
+      ansible.builtin.shell: |
+        gpg --dearmor < /tmp/mongodb-server-7.0.asc > {{ mongodb_repo_key_path }}
       args:
-        creates: "{{ mongo_repo_key_path }}"
+        creates: "{{ mongodb_repo_key_path }}"
 
-    - name: Add MongoDB apt repository
-      apt_repository:
-        repo: "deb [ arch=amd64 signed-by={{ mongo_repo_key_path }} ] {{ mongo_repo_url }} {{ mongo_repo_dist }} multiverse"
+    - name: Add MongoDB repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by={{ mongodb_repo_key_path }}] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse"
         state: present
-        filename: "mongodb-org-{{ mongo_version }}"
+        filename: mongodb-org-7.0
 
-    - name: Update apt cache
-      apt:
-        update_cache: yes
-
-    - name: Install MongoDB
-      apt:
+    - name: Install MongoDB packages
+      ansible.builtin.apt:
         name:
           - mongodb-org
           - mongodb-org-shell
           - mongodb-mongosh
         state: present
+        update_cache: yes
 
-    # -------- ENSURE REQUIRED DIRECTORIES EXIST --------
-    - name: Ensure MongoDB data directory exists
-      file:
-        path: /var/lib/mongodb
-        state: directory
-        owner: mongodb
-        group: mongodb
-        mode: '0755'
-
-    - name: Ensure MongoDB log directory exists
-      file:
+    - name: Ensure /var/log/mongodb exists
+      ansible.builtin.file:
         path: /var/log/mongodb
         state: directory
         owner: mongodb
         group: mongodb
         mode: '0755'
 
-    # -------- SAFE CONFIGURATION PATCHING --------
-    - name: Set bindIp to 0.0.0.0
-      lineinfile:
+    - name: Patch mongod.conf for replica set and network
+      ansible.builtin.blockinfile:
         path: /etc/mongod.conf
-        regexp: '^ *bindIp:'
-        line: '  bindIp: 0.0.0.0'
-        insertafter: '^net:'
-        state: present
+        marker: "# {mark} ANSIBLE MANAGED BLOCK"
+        block: |
+          net:
+            bindIp: 0.0.0.0
+            port: 27017
 
-    - name: Set replicaSet name
-      lineinfile:
-        path: /etc/mongod.conf
-        regexp: '^ *replSetName:'
-        line: '  replSetName: "{{ replica_set_name }}"'
-        insertafter: '^replication:'
-        state: present
-        create: yes
-
-    - name: Enable authorization
-      lineinfile:
-        path: /etc/mongod.conf
-        regexp: '^ *authorization:'
-        line: '  authorization: enabled'
-        insertafter: '^security:'
-        state: present
-        create: yes
+          replication:
+            replSetName: "{{ replica_set_name }}"
+      notify: Restart MongoDB
 
     - name: Ensure mongod is started and enabled
-      service:
+      ansible.builtin.service:
         name: mongod
         state: started
         enabled: true
 
-# -------------------- INITIATE REPLICA SET ON PRIMARY NODE --------------------
-- hosts: "{{ groups['mongo'][0] }}"
-  become: yes
-  vars:
-    replica_set_name: rs0
-    mongo_port: 27017
+  handlers:
+    - name: Restart MongoDB
+      ansible.builtin.service:
+        name: mongod
+        state: restarted
 
+# ----------------- 2. INITIATE REPLICA SET ON PRIMARY -----------------
+- name: Initiate MongoDB Replica Set
+  hosts: "{{ groups['mongo'][0] }}"
+  become: yes
   tasks:
     - name: Gather all replica member IPs
       set_fact:
@@ -115,81 +90,41 @@
             _id: "{{ replica_set_name }}",
             members: [
               {% for ip in replica_members %}
-                { _id: {{ loop.index0 }}, host: "{{ ip }}:{{ mongo_port }}" }{{ "," if not loop.last else "" }}
+                { _id: {{ loop.index0 }}, host: "{{ ip }}:27017" }{{ "," if not loop.last else "" }}
               {% endfor %}
             ]
           }
-
-    - name: Restart mongod to apply config
-      service:
-        name: mongod
-        state: restarted
-
-    - name: Wait 5 seconds for mongod to come up
-      pause:
-        seconds: 5
-
-    - name: Check mongod status
-      shell: systemctl is-active mongod
-      register: mongod_status
-      ignore_errors: true
-
-    - name: Tail mongod logs if failed
-      shell: tail -n 50 /var/log/mongodb/mongod.log
-      register: mongod_log
-      when: mongod_status.stdout != "active"
-
-    - name: Print mongod logs
-      debug:
-        var: mongod_log.stdout
-      when: mongod_status.stdout != "active"
-
-    - name: Fail if mongod is not running
-      fail:
-        msg: "mongod is not running. Check logs above."
-      when: mongod_status.stdout != "active"
 
     - name: Wait for mongod to accept connections
       wait_for:
         host: "{{ ansible_host }}"
         port: 27017
         timeout: 30
+        state: started
 
-    - name: Initiate replica set (if not already initialized)
+    - name: Initiate replica set
       shell: |
-        mongosh --host {{ ansible_host }} --quiet --eval '
-        try {
-          rs.status();
-          print("Replica set already initialized.");
-        } catch (e) {
-          print("Initiating replica set...");
-          printjson(rs.initiate({{ replica_config }}));
-        }
-        '
-      register: rs_init
-      retries: 5
-      delay: 5
-      until: rs_init.rc == 0
-
-    - name: Wait for full replica status
-      shell: |
-        mongosh --host {{ ansible_host }} --quiet --eval '
-        try {
-          var status = rs.status();
-          if (!status.members || status.members.length < {{ replica_members | length }}) {
-            throw new Error("Replica not fully initialized");
-          } else {
-            printjson(status);
+        mongosh --quiet --eval '
+          try {
+            var status = rs.status();
+            if (status.ok) {
+              print("Replica set already initialized.");
+            }
+          } catch (e) {
+            print("Initiating replica set...");
+            printjson(rs.initiate({{ replica_config }}));
           }
-        } catch (e) {
-          quit(1);
-        }
         '
-      register: rs_status
+      register: rs_initiate
       retries: 5
       delay: 5
-      until: rs_status.rc == 0
+      until: rs_initiate.rc == 0
 
-    - name: Show final replica set status
+    - name: Check final replica set status
+      shell: |
+        mongosh --quiet --eval 'printjson(rs.status())'
+      register: rs_status
+
+    - name: Show replica set status
       debug:
         var: rs_status.stdout

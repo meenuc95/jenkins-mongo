@@ -126,26 +126,26 @@ pipeline {
                 }
             }
         }
-        stage('Debug SSH through Bastion') {
-            when {
-                expression { !params.DESTROY_INFRA_ONLY && env.BASTION_IP && env.MONGO_PRIVATE_IPS }
-            }
-            steps {
-                withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
-                    script {
-                        def bastion_ip = env.BASTION_IP
-                        def mongo_ips = env.MONGO_PRIVATE_IPS.split(',')
-                        for (int idx = 0; idx < mongo_ips.size(); idx++) {
-                            def ip = mongo_ips[idx]
-                            sh """
-                                echo "Testing SSH to mongo${idx+1} (${ip}) via bastion..."
-                                ssh -vvv -o StrictHostKeyChecking=no -o ProxyCommand="ssh -i ${KEY} -o StrictHostKeyChecking=no -W %h:%p ubuntu@${bastion_ip}" -i ${KEY} ubuntu@${ip} 'echo SSH_OK'
-                            """
-                        }
-                    }
-                }
-            }
-        }
+        // stage('Debug SSH through Bastion') {
+        //     when {
+        //         expression { !params.DESTROY_INFRA_ONLY && env.BASTION_IP && env.MONGO_PRIVATE_IPS }
+        //     }
+        //     steps {
+        //         withCredentials([sshUserPrivateKey(credentialsId: 'ANSIBLE_SSH_KEY', keyFileVariable: 'KEY')]) {
+        //             script {
+        //                 def bastion_ip = env.BASTION_IP
+        //                 def mongo_ips = env.MONGO_PRIVATE_IPS.split(',')
+        //                 for (int idx = 0; idx < mongo_ips.size(); idx++) {
+        //                     def ip = mongo_ips[idx]
+        //                     sh """
+        //                         echo "Testing SSH to mongo${idx+1} (${ip}) via bastion..."
+        //                         ssh -vvv -o StrictHostKeyChecking=no -o ProxyCommand="ssh -i ${KEY} -o StrictHostKeyChecking=no -W %h:%p ubuntu@${bastion_ip}" -i ${KEY} ubuntu@${ip} 'echo SSH_OK'
+        //                     """
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
         stage('Run Ansible Playbook') {
             when {
                 expression { !params.DESTROY_INFRA_ONLY && env.BASTION_IP && env.MONGO_PRIVATE_IPS }
