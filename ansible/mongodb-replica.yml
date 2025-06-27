@@ -11,44 +11,61 @@
 
   tasks:
     - name: Install dependencies
-      ansible.builtin.apt:
+      apt:
         name: gnupg
         state: present
         update_cache: yes
 
     - name: Download MongoDB GPG key
-      ansible.builtin.get_url:
+      get_url:
         url: "https://pgp.mongodb.com/server-{{ mongo_version }}.asc"
         dest: /tmp/mongodb-server.asc
         mode: '0644'
 
     - name: Convert GPG key to binary and move to keyrings
-      ansible.builtin.shell: |
+      shell: |
         gpg --dearmor < /tmp/mongodb-server.asc > {{ mongo_repo_key_path }}
       args:
         creates: "{{ mongo_repo_key_path }}"
 
     - name: Add MongoDB apt repository
-      ansible.builtin.apt_repository:
+      apt_repository:
         repo: "deb [ arch=amd64 signed-by={{ mongo_repo_key_path }} ] {{ mongo_repo_url }} {{ mongo_repo_dist }} multiverse"
         state: present
         filename: "mongodb-org-{{ mongo_version }}"
 
     - name: Update apt cache
-      ansible.builtin.apt:
+      apt:
         update_cache: yes
 
     - name: Install MongoDB
-      ansible.builtin.apt:
+      apt:
         name:
           - mongodb-org
           - mongodb-org-shell
           - mongodb-mongosh
         state: present
 
-    # -------- SAFE CONFIGURATION PATCHING (no duplicate keys) --------
+    # -------- ENSURE REQUIRED DIRECTORIES EXIST --------
+    - name: Ensure MongoDB data directory exists
+      file:
+        path: /var/lib/mongodb
+        state: directory
+        owner: mongodb
+        group: mongodb
+        mode: '0755'
+
+    - name: Ensure MongoDB log directory exists
+      file:
+        path: /var/log/mongodb
+        state: directory
+        owner: mongodb
+        group: mongodb
+        mode: '0755'
+
+    # -------- SAFE CONFIGURATION PATCHING --------
     - name: Set bindIp to 0.0.0.0
-      ansible.builtin.lineinfile:
+      lineinfile:
         path: /etc/mongod.conf
         regexp: '^ *bindIp:'
         line: '  bindIp: 0.0.0.0'
@@ -56,7 +73,7 @@
         state: present
 
     - name: Set replicaSet name
-      ansible.builtin.lineinfile:
+      lineinfile:
         path: /etc/mongod.conf
         regexp: '^ *replSetName:'
         line: '  replSetName: "{{ replica_set_name }}"'
@@ -65,7 +82,7 @@
         create: yes
 
     - name: Enable authorization
-      ansible.builtin.lineinfile:
+      lineinfile:
         path: /etc/mongod.conf
         regexp: '^ *authorization:'
         line: '  authorization: enabled'
@@ -74,7 +91,7 @@
         create: yes
 
     - name: Ensure mongod is started and enabled
-      ansible.builtin.service:
+      service:
         name: mongod
         state: started
         enabled: true
@@ -104,21 +121,21 @@
           }
 
     - name: Restart mongod to apply config
-      ansible.builtin.service:
+      service:
         name: mongod
         state: restarted
 
     - name: Wait 5 seconds for mongod to come up
-      ansible.builtin.pause:
+      pause:
         seconds: 5
 
     - name: Check mongod status
-      ansible.builtin.shell: systemctl is-active mongod
+      shell: systemctl is-active mongod
       register: mongod_status
       ignore_errors: true
 
     - name: Tail mongod logs if failed
-      ansible.builtin.shell: tail -n 50 /var/log/mongodb/mongod.log
+      shell: tail -n 50 /var/log/mongodb/mongod.log
       register: mongod_log
       when: mongod_status.stdout != "active"
 
@@ -128,7 +145,7 @@
       when: mongod_status.stdout != "active"
 
     - name: Fail if mongod is not running
-      ansible.builtin.fail:
+      fail:
         msg: "mongod is not running. Check logs above."
       when: mongod_status.stdout != "active"
 
@@ -139,7 +156,7 @@
         timeout: 30
 
     - name: Initiate replica set (if not already initialized)
-      ansible.builtin.shell: |
+      shell: |
         mongosh --host {{ ansible_host }} --quiet --eval '
         try {
           rs.status();
@@ -155,7 +172,7 @@
       until: rs_init.rc == 0
 
     - name: Wait for full replica status
-      ansible.builtin.shell: |
+      shell: |
         mongosh --host {{ ansible_host }} --quiet --eval '
         try {
           var status = rs.status();
