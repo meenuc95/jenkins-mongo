@@ -1,31 +1,29 @@
 ---
-- name: Install and Configure MongoDB on Replica Set Members
+- name: Install and Configure MongoDB
   hosts: mongo
   become: yes
   vars:
-    mongodb_repo_key_url: "https://pgp.mongodb.com/server-7.0.asc"
-    mongodb_repo_key_path: "/usr/share/keyrings/mongodb-server-7.0.gpg"
     replica_set_name: "rs0"
+    mongodb_repo_key_path: "/usr/share/keyrings/mongodb-server-7.0.gpg"
 
   tasks:
-    - name: Install gnupg
+    - name: Install dependencies
       apt:
         name: gnupg
         state: present
         update_cache: yes
 
-    - name: Download MongoDB GPG key
+    - name: Add GPG key
       get_url:
-        url: "{{ mongodb_repo_key_url }}"
-        dest: /tmp/mongodb-server-7.0.asc
-        mode: '0644'
+        url: https://pgp.mongodb.com/server-7.0.asc
+        dest: /tmp/mongodb.asc
 
-    - name: Convert GPG key to binary and move to keyrings
-      shell: gpg --dearmor < /tmp/mongodb-server-7.0.asc > {{ mongodb_repo_key_path }}
+    - name: Add GPG to keyring
+      shell: gpg --dearmor < /tmp/mongodb.asc > {{ mongodb_repo_key_path }}
       args:
         creates: "{{ mongodb_repo_key_path }}"
 
-    - name: Add MongoDB repository
+    - name: Add MongoDB apt repo
       apt_repository:
         repo: "deb [arch=amd64 signed-by={{ mongodb_repo_key_path }}] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse"
         state: present
@@ -48,7 +46,7 @@
         group: mongodb
         mode: '0755'
 
-    - name: Deploy clean mongod.conf using template
+    - name: Deploy mongod.conf from template
       template:
         src: templates/mongod.conf.j2
         dest: /etc/mongod.conf
@@ -57,7 +55,7 @@
         mode: '0644'
       notify: Restart MongoDB
 
-    - name: Ensure mongod is started and enabled
+    - name: Enable and start mongod
       service:
         name: mongod
         state: started
@@ -69,60 +67,56 @@
         name: mongod
         state: restarted
 
-# ---------------------- INITIATE REPLICA SET ----------------------
+# ------------------ REPLICA INITIATION ------------------
 
-- name: Initiate Replica Set from Primary Node
+- name: Initialize Replica Set
   hosts: "{{ groups['mongo'][0] }}"
   become: yes
   vars:
     replica_set_name: "rs0"
 
   tasks:
-    - name: Gather all replica member IPs
+    - name: Gather member IPs
       set_fact:
         replica_members: "{{ groups['mongo'] | map('extract', hostvars, ['ansible_host']) | list }}"
 
-    - name: Build replica set configuration
+    - name: Generate replica set config
       set_fact:
         replica_config: |
           {
             _id: "{{ replica_set_name }}",
             members: [
               {% for ip in replica_members %}
-                { _id: {{ loop.index0 }}, host: "{{ ip }}:27017" }{{ "," if not loop.last else "" }}
+              { _id: {{ loop.index0 }}, host: "{{ ip }}:27017" }{{ "," if not loop.last else "" }}
               {% endfor %}
             ]
           }
 
-    - name: Wait for mongod to accept connections
+    - name: Wait for mongod to respond
       wait_for:
         host: "{{ ansible_host }}"
         port: 27017
+        delay: 5
         timeout: 30
-        state: started
 
-    - name: Initiate replica set
+    - name: Initiate Replica Set
       shell: |
         mongosh --quiet --eval '
-          try {
-            var status = rs.status();
-            if (status.ok) {
-              print("Replica set already initialized.");
-            }
-          } catch (e) {
+        try {
+          if (!rs.status().ok) {
             print("Initiating replica set...");
             printjson(rs.initiate({{ replica_config }}));
+          } else {
+            print("Already initiated.");
           }
-        '
-      register: rs_init
-      retries: 5
-      delay: 5
-      until: rs_init.rc == 0
+        } catch (e) {
+          print("Error or already initiated");
+        }'
 
-    - name: Show final replica status
+    - name: Check replica set status
       shell: mongosh --quiet --eval 'printjson(rs.status())'
-      register: final_rs_status
+      register: rs_status
 
-    - name: Print replica status
+    - name: Show status
       debug:
-        var: final_rs_status.stdout
+        var: rs_status.stdout
