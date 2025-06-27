@@ -46,33 +46,38 @@
           - mongodb-mongosh
         state: present
 
-    - name: Configure mongod.conf for replication and access
-      ansible.builtin.blockinfile:
+    # -------- SAFE CONFIGURATION PATCHING (no duplicate keys) --------
+    - name: Set bindIp to 0.0.0.0
+      ansible.builtin.lineinfile:
         path: /etc/mongod.conf
-        marker: "# {mark} ANSIBLE MANAGED BLOCK"
-        block: |
-          net:
-            bindIp: 0.0.0.0
-            port: {{ mongo_port }}
+        regexp: '^ *bindIp:'
+        line: '  bindIp: 0.0.0.0'
+        insertafter: '^net:'
+        state: present
 
-          replication:
-            replSetName: "{{ replica_set_name }}"
+    - name: Set replicaSet name
+      ansible.builtin.lineinfile:
+        path: /etc/mongod.conf
+        regexp: '^ *replSetName:'
+        line: '  replSetName: "{{ replica_set_name }}"'
+        insertafter: '^replication:'
+        state: present
+        create: yes
 
-          security:
-            authorization: enabled
-      notify: Restart MongoDB
+    - name: Enable authorization
+      ansible.builtin.lineinfile:
+        path: /etc/mongod.conf
+        regexp: '^ *authorization:'
+        line: '  authorization: enabled'
+        insertafter: '^security:'
+        state: present
+        create: yes
 
     - name: Ensure mongod is started and enabled
       ansible.builtin.service:
         name: mongod
         state: started
         enabled: true
-
-  handlers:
-    - name: Restart MongoDB
-      ansible.builtin.service:
-        name: mongod
-        state: restarted
 
 # -------------------- INITIATE REPLICA SET ON PRIMARY NODE --------------------
 - hosts: "{{ groups['mongo'][0] }}"
@@ -98,20 +103,12 @@
             ]
           }
 
-    - name: Show mongod.conf contents
-      ansible.builtin.shell: cat /etc/mongod.conf
-      register: mongod_conf
-
-    - name: Debug mongod.conf contents
-      debug:
-        var: mongod_conf.stdout
-
-    - name: Restart mongod
+    - name: Restart mongod to apply config
       ansible.builtin.service:
         name: mongod
         state: restarted
 
-    - name: Wait a few seconds for mongod to come up
+    - name: Wait 5 seconds for mongod to come up
       ansible.builtin.pause:
         seconds: 5
 
@@ -132,10 +129,10 @@
 
     - name: Fail if mongod is not running
       ansible.builtin.fail:
-        msg: "mongod is not running. Check the configuration/logs above."
+        msg: "mongod is not running. Check logs above."
       when: mongod_status.stdout != "active"
 
-    - name: Wait for mongod to accept external connections
+    - name: Wait for mongod to accept connections
       wait_for:
         host: "{{ ansible_host }}"
         port: 27017
