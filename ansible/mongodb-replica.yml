@@ -46,7 +46,7 @@
           - mongodb-mongosh
         state: present
 
-    - name: Configure mongod.conf for replication and open access
+    - name: Configure mongod.conf for replication and access
       ansible.builtin.blockinfile:
         path: /etc/mongod.conf
         marker: "# {mark} ANSIBLE MANAGED BLOCK"
@@ -98,9 +98,15 @@
             ]
           }
 
+    - name: Wait for mongod to accept connections
+      wait_for:
+        host: "{{ ansible_host }}"
+        port: 27017
+        timeout: 30
+
     - name: Initiate replica set (if not already initialized)
       ansible.builtin.shell: |
-        mongosh --quiet --eval '
+        mongosh --host {{ ansible_host }} --quiet --eval '
         try {
           rs.status();
           print("Replica set already initialized.");
@@ -114,13 +120,13 @@
       delay: 5
       until: rs_init.rc == 0
 
-    - name: Wait for replica to be healthy
+    - name: Wait for full replica status
       ansible.builtin.shell: |
-        mongosh --quiet --eval '
+        mongosh --host {{ ansible_host }} --quiet --eval '
         try {
           var status = rs.status();
           if (!status.members || status.members.length < {{ replica_members | length }}) {
-            throw new Error("Replica set not fully initialized yet");
+            throw new Error("Replica not fully initialized");
           } else {
             printjson(status);
           }
