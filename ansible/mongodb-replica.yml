@@ -1,5 +1,5 @@
-# ----------------- 1. INSTALL & CONFIGURE MONGODB -----------------
-- name: Install and Configure MongoDB
+---
+- name: Install and Configure MongoDB on All Replica Set Members
   hosts: mongo
   become: yes
   vars:
@@ -26,13 +26,13 @@
       args:
         creates: "{{ mongodb_repo_key_path }}"
 
-    - name: Add MongoDB repository
+    - name: Add MongoDB 7.0 repo
       ansible.builtin.apt_repository:
         repo: "deb [arch=amd64 signed-by={{ mongodb_repo_key_path }}] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse"
         state: present
         filename: mongodb-org-7.0
 
-    - name: Install MongoDB packages
+    - name: Install MongoDB
       ansible.builtin.apt:
         name:
           - mongodb-org
@@ -41,7 +41,7 @@
         state: present
         update_cache: yes
 
-    - name: Ensure /var/log/mongodb exists
+    - name: Ensure log dir exists
       ansible.builtin.file:
         path: /var/log/mongodb
         state: directory
@@ -49,7 +49,7 @@
         group: mongodb
         mode: '0755'
 
-    - name: Patch mongod.conf for replica set and network
+    - name: Patch mongod.conf with networking and replica set (no auth)
       ansible.builtin.blockinfile:
         path: /etc/mongod.conf
         marker: "# {mark} ANSIBLE MANAGED BLOCK"
@@ -74,10 +74,14 @@
         name: mongod
         state: restarted
 
-# ----------------- 2. INITIATE REPLICA SET ON PRIMARY -----------------
-- name: Initiate MongoDB Replica Set
+# ------------------ SECOND PLAY: Initiate Replica Set ------------------
+
+- name: Initiate Replica Set from Primary Node
   hosts: "{{ groups['mongo'][0] }}"
   become: yes
+  vars:
+    replica_set_name: "rs0"
+
   tasks:
     - name: Gather all replica member IPs
       set_fact:
@@ -120,11 +124,10 @@
       delay: 5
       until: rs_initiate.rc == 0
 
-    - name: Check final replica set status
-      shell: |
-        mongosh --quiet --eval 'printjson(rs.status())'
-      register: rs_status
+    - name: Show final replica status
+      shell: mongosh --quiet --eval 'printjson(rs.status())'
+      register: final_rs_status
 
-    - name: Show replica set status
+    - name: Print replica status output
       debug:
-        var: rs_status.stdout
+        var: final_rs_status.stdout
