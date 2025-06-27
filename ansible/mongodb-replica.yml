@@ -77,6 +77,10 @@
 # -------------------- INITIATE REPLICA SET ON PRIMARY NODE -------------------
 - hosts: "{{ groups['mongo'][0] }}"
   become: yes
+  vars:
+    replica_set_name: rs0
+    mongo_port: 27017
+
   tasks:
     - name: Gather all replica member IPs
       set_fact:
@@ -94,7 +98,7 @@
             ]
           }
 
-    - name: Initiate replica set (if not already initiated)
+    - name: Initiate replica set (if not already initialized)
       ansible.builtin.shell: |
         mongosh --quiet --eval '
         try {
