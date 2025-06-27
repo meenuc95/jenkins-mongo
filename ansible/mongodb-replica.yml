@@ -1,44 +1,45 @@
----
-- name: Install and Configure MongoDB on All Replica Members
-  hosts: mongo
+- hosts: mongo
   become: yes
   vars:
-    replica_set_name: "rs0"
-    mongodb_repo_key_path: "/usr/share/keyrings/mongodb-server-7.0.gpg"
-
+    replica_set_name: rs0
   tasks:
-    - name: Install gnupg
+
+    - name: Install required dependencies
       apt:
         name: gnupg
-        state: present
         update_cache: yes
+        state: present
 
     - name: Download MongoDB GPG key
       get_url:
         url: https://pgp.mongodb.com/server-7.0.asc
-        dest: /tmp/mongodb.asc
+        dest: /tmp/mongodb-server-7.0.asc
 
-    - name: Add GPG to system keyring
-      shell: gpg --dearmor < /tmp/mongodb.asc > {{ mongodb_repo_key_path }}
+    - name: Add GPG key
+      shell: |
+        gpg --dearmor < /tmp/mongodb-server-7.0.asc > /usr/share/keyrings/mongodb-server-7.0.gpg
       args:
-        creates: "{{ mongodb_repo_key_path }}"
+        creates: /usr/share/keyrings/mongodb-server-7.0.gpg
 
-    - name: Add MongoDB apt repository
+    - name: Add MongoDB 7.0 APT repository
       apt_repository:
-        repo: "deb [arch=amd64 signed-by={{ mongodb_repo_key_path }}] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse"
-        filename: mongodb-org-7.0
+        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse"
         state: present
+        filename: mongodb-org-7.0
 
-    - name: Install MongoDB
+    - name: Update APT cache
+      apt:
+        update_cache: yes
+
+    - name: Install MongoDB packages
       apt:
         name:
           - mongodb-org
           - mongodb-org-shell
           - mongodb-mongosh
         state: present
-        update_cache: yes
 
-    - name: Ensure log directory exists
+    - name: Ensure MongoDB log directory exists
       file:
         path: /var/log/mongodb
         state: directory
@@ -46,18 +47,20 @@
         group: mongodb
         mode: '0755'
 
-    - name: Deploy mongod.conf
+    - name: Deploy clean mongod.conf using template
       template:
         src: templates/mongod.conf.j2
         dest: /etc/mongod.conf
+        owner: root
+        group: root
         mode: '0644'
       notify: Restart mongod
 
-    - name: Enable and start mongod
+    - name: Enable and start mongod service
       service:
         name: mongod
-        enabled: yes
         state: started
+        enabled: yes
 
   handlers:
     - name: Restart mongod
@@ -65,53 +68,47 @@
         name: mongod
         state: restarted
 
-# ----------------- REPLICA SET INIT ------------------
+# ------------------ Initiate Replica Set -----------------------
 
-- name: Initialize Replica Set on Primary Node
-  hosts: "{{ groups['mongo'][0] }}"
+- hosts: "{{ groups['mongo'][0] }}"
   become: yes
   vars:
-    replica_set_name: "rs0"
-
+    replica_set_name: rs0
   tasks:
-    - name: Get replica member IPs
+
+    - name: Gather all replica member IPs
       set_fact:
         replica_members: "{{ groups['mongo'] | map('extract', hostvars, ['ansible_host']) | list }}"
 
-    - name: Construct replica set config
-      set_fact:
-        replica_config: |
-          {
-            _id: "{{ replica_set_name }}",
-            members: [
-              {% for ip in replica_members %}
-              { _id: {{ loop.index0 }}, host: "{{ ip }}:27017" }{{ "," if not loop.last else "" }}
-              {% endfor %}
-            ]
-          }
-
     - name: Wait for mongod to be ready
       wait_for:
-        host: "{{ ansible_host }}"
         port: 27017
         delay: 5
-        timeout: 60
+        timeout: 30
 
     - name: Initiate replica set (with retry)
       shell: |
         mongosh --quiet --eval '
-        if (rs.status().ok === undefined) {
-          print("Initiating replica set...");
-          printjson(rs.initiate({{ replica_config }}));
-        } else {
+        try {
+          rs.status();
           print("Replica set already exists.");
+        } catch (e) {
+          print("Initiating replica set...");
+          rs.initiate({
+            _id: "{{ replica_set_name }}",
+            members: [
+              {% for ip in replica_members %}
+                { _id: {{ loop.index0 }}, host: "{{ ip }}:27017" }{{ "," if not loop.last else "" }}
+              {% endfor %}
+            ]
+          });
         }'
       register: rs_initiate
       retries: 5
       delay: 5
       until: rs_initiate.rc == 0
 
-    - name: Wait for replica set to be healthy
+    - name: Wait for replica set to become healthy
       shell: |
         mongosh --quiet --eval '
         try {
@@ -124,6 +121,6 @@
       delay: 5
       until: rs_status.rc == 0
 
-    - name: Display replica set status
+    - name: Print final replica status
       debug:
         var: rs_status.stdout
