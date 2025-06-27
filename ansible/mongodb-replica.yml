@@ -1,4 +1,4 @@
-# ------------------------ MONGODB INSTALL & CONFIGURE ------------------------
+# -------------------- MONGODB INSTALL & CONFIGURE ON ALL NODES --------------------
 - hosts: mongo
   become: yes
   vars:
@@ -74,7 +74,7 @@
         name: mongod
         state: restarted
 
-# -------------------- INITIATE REPLICA SET ON PRIMARY NODE -------------------
+# -------------------- INITIATE REPLICA SET ON PRIMARY NODE --------------------
 - hosts: "{{ groups['mongo'][0] }}"
   become: yes
   vars:
@@ -98,7 +98,44 @@
             ]
           }
 
-    - name: Wait for mongod to accept connections
+    - name: Show mongod.conf contents
+      ansible.builtin.shell: cat /etc/mongod.conf
+      register: mongod_conf
+
+    - name: Debug mongod.conf contents
+      debug:
+        var: mongod_conf.stdout
+
+    - name: Restart mongod
+      ansible.builtin.service:
+        name: mongod
+        state: restarted
+
+    - name: Wait a few seconds for mongod to come up
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Check mongod status
+      ansible.builtin.shell: systemctl is-active mongod
+      register: mongod_status
+      ignore_errors: true
+
+    - name: Tail mongod logs if failed
+      ansible.builtin.shell: tail -n 50 /var/log/mongodb/mongod.log
+      register: mongod_log
+      when: mongod_status.stdout != "active"
+
+    - name: Print mongod logs
+      debug:
+        var: mongod_log.stdout
+      when: mongod_status.stdout != "active"
+
+    - name: Fail if mongod is not running
+      ansible.builtin.fail:
+        msg: "mongod is not running. Check the configuration/logs above."
+      when: mongod_status.stdout != "active"
+
+    - name: Wait for mongod to accept external connections
       wait_for:
         host: "{{ ansible_host }}"
         port: 27017
