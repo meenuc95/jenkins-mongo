@@ -1,5 +1,5 @@
 ---
-- name: Install and Configure MongoDB on All Replica Set Members
+- name: Install and Configure MongoDB on Replica Set Members
   hosts: mongo
   become: yes
   vars:
@@ -9,31 +9,30 @@
 
   tasks:
     - name: Install gnupg
-      ansible.builtin.apt:
+      apt:
         name: gnupg
         state: present
         update_cache: yes
 
     - name: Download MongoDB GPG key
-      ansible.builtin.get_url:
+      get_url:
         url: "{{ mongodb_repo_key_url }}"
         dest: /tmp/mongodb-server-7.0.asc
         mode: '0644'
 
     - name: Convert GPG key to binary and move to keyrings
-      ansible.builtin.shell: |
-        gpg --dearmor < /tmp/mongodb-server-7.0.asc > {{ mongodb_repo_key_path }}
+      shell: gpg --dearmor < /tmp/mongodb-server-7.0.asc > {{ mongodb_repo_key_path }}
       args:
         creates: "{{ mongodb_repo_key_path }}"
 
-    - name: Add MongoDB 7.0 repo
-      ansible.builtin.apt_repository:
+    - name: Add MongoDB repository
+      apt_repository:
         repo: "deb [arch=amd64 signed-by={{ mongodb_repo_key_path }}] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse"
         state: present
         filename: mongodb-org-7.0
 
     - name: Install MongoDB
-      ansible.builtin.apt:
+      apt:
         name:
           - mongodb-org
           - mongodb-org-shell
@@ -41,40 +40,36 @@
         state: present
         update_cache: yes
 
-    - name: Ensure log dir exists
-      ansible.builtin.file:
+    - name: Ensure log directory exists
+      file:
         path: /var/log/mongodb
         state: directory
         owner: mongodb
         group: mongodb
         mode: '0755'
 
-    - name: Patch mongod.conf with networking and replica set (no auth)
-      ansible.builtin.blockinfile:
-        path: /etc/mongod.conf
-        marker: "# {mark} ANSIBLE MANAGED BLOCK"
-        block: |
-          net:
-            bindIp: 0.0.0.0
-            port: 27017
-
-          replication:
-            replSetName: "{{ replica_set_name }}"
+    - name: Deploy clean mongod.conf using template
+      template:
+        src: templates/mongod.conf.j2
+        dest: /etc/mongod.conf
+        owner: root
+        group: root
+        mode: '0644'
       notify: Restart MongoDB
 
     - name: Ensure mongod is started and enabled
-      ansible.builtin.service:
+      service:
         name: mongod
         state: started
         enabled: true
 
   handlers:
     - name: Restart MongoDB
-      ansible.builtin.service:
+      service:
         name: mongod
         state: restarted
 
-# ------------------ SECOND PLAY: Initiate Replica Set ------------------
+# ---------------------- INITIATE REPLICA SET ----------------------
 
 - name: Initiate Replica Set from Primary Node
   hosts: "{{ groups['mongo'][0] }}"
@@ -119,15 +114,15 @@
             printjson(rs.initiate({{ replica_config }}));
           }
         '
-      register: rs_initiate
+      register: rs_init
       retries: 5
       delay: 5
-      until: rs_initiate.rc == 0
+      until: rs_init.rc == 0
 
     - name: Show final replica status
       shell: mongosh --quiet --eval 'printjson(rs.status())'
       register: final_rs_status
 
-    - name: Print replica status output
+    - name: Print replica status
       debug:
         var: final_rs_status.stdout
